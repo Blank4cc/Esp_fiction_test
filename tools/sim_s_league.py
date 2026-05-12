@@ -471,12 +471,10 @@ def main():
             with open(output_path, "a", encoding="utf-8") as f:
                 # 如果文件不存在或为空，先写头部
                 if current_rounds == 0:
-                    header = (
-                        "=" * 80 + "\n"
-                        "  S级联赛（星脉超级联赛）— 模拟战报\n"
-                        "  赛季: S7 | 16支战队 | 双循环 | BO3 | 共30轮\n"
-                        "=" * 80 + "\n\n"
-                    )
+                    header = "=" * 80
+                    header += "\n  S级联赛（星脉超级联赛）— 模拟战报\n"
+                    header += "  赛季: S7 | 16支战队 | 双循环 | BO3 | 共30轮\n"
+                    header += "=" * 80 + "\n\n"
                     f.write(header)
 
                 f.write(round_output)
