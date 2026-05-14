@@ -4,18 +4,39 @@
 A级联赛（星脉挑战联赛）赛程生成器
 =================================
 根据 league_structure.md 和 teams_archive.md 的数据，
-一键生成东/西/南/北四赛区单循环完整赛程，输出为 txt 表格格式。
+一键生成东/西/南/北四赛区单循环完整赛程，输出为 Markdown 表格格式。
 
 赛制：4赛区 × 5支战队，赛区内单循环（每队打4场，5轮，每轮2场+1队轮空）。
+赛程中预留：清明节、劳动节、端午节休赛 + 季中赛两周空档。
 """
 
 import os
 from datetime import date, timedelta
 
 # ============================================================
+# 赛季日历常量（2052年，与S级联赛一致）
+# ============================================================
+BREAKS = [
+    (date(2052, 4,  4), date(2052, 4,  6), "清明节",  "🌿"),
+    (date(2052, 5,  1), date(2052, 5,  5), "劳动节黄金周", "💼"),
+    (date(2052, 6,  7), date(2052, 6,  9), "端午节",  "🐉"),
+]
+MID_SEASON_BREAK = (date(2052, 6, 14), date(2052, 6, 27), "全球季中赛", "🏆")
+
+
+def is_break_day(d):
+    for start, end, name, icon in BREAKS:
+        if start <= d <= end:
+            return True, name, icon
+    ms_start, ms_end, ms_name, ms_icon = MID_SEASON_BREAK
+    if ms_start <= d <= ms_end:
+        return True, ms_name, ms_icon
+    return False, "", ""
+
+
+# ============================================================
 # 数据区：A级联赛四赛区战队
 # ============================================================
-
 A_EAST = [
     {"abbr": "WE",  "full": "波澜电竞 Wave Esports",        "city": "沪江市（杨江区）"},
     {"abbr": "FD",  "full": "东方霜华 Frost Dawn",           "city": "杭溪市"},
@@ -23,7 +44,6 @@ A_EAST = [
     {"abbr": "HT",  "full": "浦江猛虎 Huangpu Tiger",        "city": "沪江市（皇浦区）"},
     {"abbr": "DR",  "full": "晨光突击 Dawn Raid",            "city": "苏锦市"},
 ]
-
 A_NORTH = [
     {"abbr": "GWall","full": "长城守卫 Great Wall",           "city": "北燕市（朝阳区）"},
     {"abbr": "IR",   "full": "燕山铁骑 Iron Rider",           "city": "北燕市（顺义）"},
@@ -31,7 +51,6 @@ A_NORTH = [
     {"abbr": "PLR",  "full": "北极星 Polaris",               "city": "盛京市"},
     {"abbr": "BT",   "full": "玄武重甲 Black Tortoise",       "city": "恒州市"},
 ]
-
 A_SOUTH = [
     {"abbr": "SS",   "full": "南海涛声 South Sea",            "city": "粤城（番禺）"},
     {"abbr": "PR",   "full": "珠江骑士 Pearl River",          "city": "粤城"},
@@ -39,7 +58,6 @@ A_SOUTH = [
     {"abbr": "HE",   "full": "鹭港雄鹰 Heron Eagle",          "city": "鹭港市"},
     {"abbr": "CW",   "full": "椰风逐浪 Coconut Wind",         "city": "椰城市"},
 ]
-
 A_WEST = [
     {"abbr": "MRD",  "full": "岷江飞龙 Min River Dragon",     "city": "蓉城（青羊区）"},
     {"abbr": "GR",   "full": "三峡怒浪 Gorge Rush",           "city": "渝州市"},
@@ -57,20 +75,13 @@ REGIONS = {
 
 
 def generate_schedule_for_region(teams):
-    """为一个赛区生成完整的单循环赛程矩阵。
-    
-    5队单循环：添加虚拟队（bye），使用通用圆圈法生成6队双循环对阵，
-    然后过滤掉含虚拟队的对阵。每轮产生2场实对阵 + 1队轮空。
-    共5轮，每队打4场。
-    """
+    """为5队赛区生成单循环赛程（5轮，每轮2场）。"""
     n = len(teams)
     if n % 2 == 0:
-        # 偶数队：标准圆圈法
         fixed = n - 1
         circle = list(range(n - 1))
-        total_rounds = n - 1
         rounds = []
-        for r in range(total_rounds):
+        for r in range(n - 1):
             round_matches = []
             opponent_fixed = circle[r % (n - 1)]
             if r % 2 == 0:
@@ -88,132 +99,153 @@ def generate_schedule_for_region(teams):
             rounds.append(round_matches)
         return rounds
     else:
-        # 奇数队（5队）：添加虚拟队，扩为6队（偶数）
-        dummy_idx = n  # 虚拟队编号
-        extended_n = n + 1
-        fixed = dummy_idx  # 虚拟队作为固定队
-        circle = list(range(n))  # 5个实队: [0,1,2,3,4]
-        total_rounds = n  # 5轮
+        circle = list(range(n))
         rounds = []
-
-        for r in range(total_rounds):
+        for r in range(n):
             round_matches = []
-            # 虚拟队的对手本轮轮空
-            # 其余4队配对成2场
-            by_idx = circle[r % n]  # 本轮轮空队
-
-            # 其余队伍配对
-            for i in range(1, (n - 1) // 2 + 1):  # i=1 (n=5时 n-1=4, (n-1)//2=2)
+            for i in range(1, n // 2 + 1):
                 left = (r + i) % n
                 right = (r - i) % n
                 if i % 2 == 1:
                     round_matches.append((circle[left], circle[right]))
                 else:
                     round_matches.append((circle[right], circle[left]))
-
             round_matches.sort(key=lambda m: m[0])
             rounds.append(round_matches)
-
         return rounds
 
 
-def generate_dates_a(num_regions, rounds_per_region):
+def generate_dates_a(num_rounds):
     """
-    A级联赛日期生成。
-    四赛区同时进行，每周一轮，与S级联赛同期（3月~7月）。
-    共5轮（赛区赛），后续总决赛另行安排。
+    生成A级联赛日期（每周日），跳过休赛期。
+    返回 (dates, breaks_between)。
     """
-    start = date(2025, 3, 1)
-    while start.weekday() != 6:  # 周日
+    start = date(2052, 3, 1)
+    while start.weekday() != 6:
         start += timedelta(days=1)
 
     dates = []
+    breaks_between = []
     current = start
-    for _ in range(rounds_per_region):
+
+    for r in range(num_rounds):
+        skipped_set = {}
+        while True:
+            is_brk, brk_name, brk_icon = is_break_day(current)
+            if not is_brk:
+                break
+            if brk_name not in skipped_set:
+                skipped_set[brk_name] = brk_icon
+            current += timedelta(days=1)
+            while current.weekday() != 6:
+                current += timedelta(days=1)
+
+        if skipped_set:
+            combined = " / ".join(f"{icon} {name}" for name, icon in skipped_set.items())
+            breaks_between.append((r + 1, combined))
+
         dates.append(current)
-        current += timedelta(days=7)  # 每周日
+        current += timedelta(days=7)
 
-    return dates
+    return dates, breaks_between
 
 
-def format_a_schedule_txt(regions, all_schedules, dates):
-    """将A级联赛赛程格式化为txt。"""
+def format_a_schedule_md(regions, all_schedules, dates, breaks_between):
+    """格式化 A 级赛程为 Markdown。"""
     lines = []
-    lines.append("=" * 100)
-    lines.append("  A级联赛（星脉挑战联赛）— 完整赛程（赛区赛阶段）")
-    lines.append("  赛季: S7 | 4赛区 × 5支战队 | 赛区内单循环 | 共5轮")
-    lines.append("=" * 100)
+
+    lines.append("# A级联赛（星脉挑战联赛）— 完整赛程（赛区赛阶段）")
+    lines.append("")
+    lines.append(f"> **赛季**: S7 | **赛区**: 东/西/南/北 × 5支战队 | **赛制**: 赛区内单循环 | **共**: {len(dates)}轮 | **单场**: BO3")
     lines.append("")
 
-    # 按轮次输出（所有赛区在同一轮）
-    num_rounds = len(dates)
-    for r in range(num_rounds):
-        lines.append(f"{'─' * 80}")
-        lines.append(f"  第 {r + 1} 轮  |  日期: {dates[r].strftime('%Y-%m-%d')}（周日）")
-        lines.append(f"{'─' * 80}")
+    # 休赛日历
+    lines.append("## 休赛日历")
+    lines.append("")
+    lines.append("| 时间段 | 说明 |")
+    lines.append("|--------|------|")
+    for start, end, name, icon in BREAKS:
+        lines.append(f"| {icon} {start.strftime('%m/%d')}–{end.strftime('%m/%d')} | {name} |")
+    ms_start, ms_end, ms_name, ms_icon = MID_SEASON_BREAK
+    lines.append(f"| {ms_icon} {ms_start.strftime('%m/%d')}–{ms_end.strftime('%m/%d')} | {ms_name} |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    break_map = {after_r: desc for after_r, desc in breaks_between}
+
+    for r in range(len(dates)):
+        lines.append(f"## 第 {r + 1} 轮 — {dates[r].strftime('%Y-%m-%d')}（周日）")
+        lines.append("")
 
         for region_name, region_teams in regions.items():
             schedule = all_schedules[region_name]
             round_matches = schedule[r]
-
-            lines.append(f"  ▸ {region_name}")
-            lines.append(f"    {'主场战队':<30s} {'':>3s}  {'客场战队':<30s}  {'主场城市':<16s}")
-            lines.append(f"    {'─' * 30} {'─' * 3}  {'─' * 30}  {'─' * 16}")
-
-            for home_idx, away_idx in round_matches:
+            lines.append(f"### {region_name}")
+            lines.append("")
+            lines.append("| # | 主场战队 | | 客场战队 | 主场城市 |")
+            lines.append("|---|----------|---|----------|----------|")
+            for i, (home_idx, away_idx) in enumerate(round_matches, 1):
                 home_team = region_teams[home_idx]
                 away_team = region_teams[away_idx]
-                home_full = f"{home_team['abbr']} {home_team['full']}"
-                away_full = f"{away_team['abbr']} {away_team['full']}"
-                lines.append(f"    {home_full:<30s}  vs  {away_full:<30s}  {home_team['city']:<16s}")
-
+                home_full = f"**{home_team['abbr']}** {home_team['full']}"
+                away_full = f"**{away_team['abbr']}** {away_team['full']}"
+                lines.append(f"| {i} | {home_full} | vs | {away_full} | {home_team['city']} |")
             lines.append("")
 
+        after_r = r + 1
+        if after_r in break_map:
+            lines.append(f"> ⏸ **休赛**：{break_map[after_r]}")
+            lines.append("")
+
+        lines.append("---")
         lines.append("")
 
-    # 统计信息
-    lines.append("=" * 100)
-    lines.append("  统计摘要")
-    lines.append("=" * 100)
-    for region_name, region_teams in regions.items():
-        lines.append(f"  {region_name}: {len(region_teams)}队, {num_rounds}轮, {num_rounds * 2}场对阵")
+    # 统计摘要
+    lines.append("## 统计摘要")
     lines.append("")
-    lines.append("  注：赛区赛结束后，各赛区前2名（共8队）进入A级全国总决赛（单败淘汰BO3）。")
-    lines.append("  总决赛赛程另行安排。")
+    lines.append("| 赛区 | 队伍数 | 轮次 | 总场次 |")
+    lines.append("|------|--------|------|--------|")
+    for region_name, region_teams in regions.items():
+        lines.append(f"| {region_name} | {len(region_teams)} | {len(dates)} | {len(dates) * 2} |")
+    lines.append("")
+    lines.append("> **注**：赛区赛结束后，各赛区前2名（共8队）进入A级全国总决赛（单败淘汰BO3）。总决赛赛程另行安排。")
     lines.append("")
 
-    # 队名对照
-    lines.append("=" * 100)
-    lines.append("  战队缩写对照表")
-    lines.append("=" * 100)
+    # 战队缩写对照
+    lines.append("---")
+    lines.append("")
+    lines.append("## 战队缩写对照表")
+    lines.append("")
     for region_name, region_teams in regions.items():
-        lines.append(f"  [{region_name}]")
+        lines.append(f"### {region_name}")
+        lines.append("")
+        lines.append("| 缩写 | 全称 | 城市 |")
+        lines.append("|------|------|------|")
         for t in region_teams:
-            lines.append(f"    {t['abbr']:<6s} = {t['full']}")
+            lines.append(f"| **{t['abbr']}** | {t['full']} | {t['city']} |")
+        lines.append("")
 
     return "\n".join(lines)
 
 
 def main():
-    # 为每个赛区生成赛程
     all_schedules = {}
     for region_name, region_teams in REGIONS.items():
         all_schedules[region_name] = generate_schedule_for_region(region_teams)
 
-    # 生成日期（各赛区同一天比赛）
-    dates = generate_dates_a(4, 5)
+    dates, breaks_between = generate_dates_a(5)
+    output = format_a_schedule_md(REGIONS, all_schedules, dates, breaks_between)
 
-    # 格式化输出
-    output = format_a_schedule_txt(REGIONS, all_schedules, dates)
-
-    # 写入文件
     output_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = os.path.join(output_dir, "schedule_a_league_output.txt")
+    output_path = os.path.join(output_dir, "schedule_a_league_output.md")
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(output)
 
     print(f"[完成] A级联赛赛程已生成 → {output_path}")
     print(f"  共 4 赛区，每赛区 5 轮，总计 40 场对阵")
+    for after_r, desc in breaks_between:
+        print(f"  ⏸ 第 {after_r - 1} 轮后：{desc}")
 
 
 if __name__ == "__main__":

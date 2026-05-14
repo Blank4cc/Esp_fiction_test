@@ -4,16 +4,45 @@
 S级联赛（星脉超级联赛）赛程生成器
 ===============================
 根据 league_structure.md 和 teams_archive.md 的数据，
-一键生成16支战队双循环30轮完整赛程，输出为 txt 表格格式。
+一键生成16支战队双循环30轮完整赛程，输出为 Markdown 表格格式。
 
 赛制：双循环（主客场各一次），每轮8场对阵，共30轮。
+赛程中预留：清明节、劳动节、端午节休赛 + 季中赛两周空档。
 """
 
 import os
 from datetime import date, timedelta
 
 # ============================================================
-# 数据区：16支S级战队（按编号排列，非积分排名）
+# 赛季日历常量（2052年）
+# ============================================================
+SEASON_START = date(2052, 3, 1)       # 赛季起始日
+FAST_ROUNDS = 10                       # 前10轮快节奏（周三/周六交替）
+
+# 休赛期定义（start, end, 名称, 图标）
+BREAKS = [
+    (date(2052, 4,  4), date(2052, 4,  6), "清明节",  "🌿"),
+    (date(2052, 5,  1), date(2052, 5,  5), "劳动节黄金周", "💼"),
+    (date(2052, 6,  7), date(2052, 6,  9), "端午节",  "🐉"),
+]
+
+# 季中赛（单独标记，不占轮次但插入战报说明）
+MID_SEASON_BREAK = (date(2052, 6, 14), date(2052, 6, 27), "全球季中赛（Rift Mid-Season Clash）", "🏆")
+
+
+def is_break_day(d):
+    """检查某日是否在休赛期内。返回 (is_break, break_name, icon)"""
+    for start, end, name, icon in BREAKS:
+        if start <= d <= end:
+            return True, name, icon
+    ms_start, ms_end, ms_name, ms_icon = MID_SEASON_BREAK
+    if ms_start <= d <= ms_end:
+        return True, ms_name, ms_icon
+    return False, "", ""
+
+
+# ============================================================
+# 数据区：16支S级战队
 # ============================================================
 S_TEAMS = [
     {"id": "S-01", "abbr": "PV",    "full": "幻界战队 PHANTOM VOID",        "city": "沪江市"},
@@ -36,40 +65,20 @@ S_TEAMS = [
 
 
 def generate_round_robin_schedule(teams):
-    """
-    使用圆圈法（Circle Method）生成双循环赛程。
-
-    算法说明：
-    - 将16队编号0~15，固定第15号（最后一队），其余15队围成圆圈。
-    - 每轮中，固定队 vs 圆圈中某队，其余队按对称配对。
-    - 前半程（1~15轮）生成所有不同的对阵组合。
-    - 后半程（16~30轮）将主客场对调。
-
-    返回: list of list of (home_idx, away_idx)
-    """
+    """圆圈法生成双循环赛程。"""
     n = len(teams)
     if n % 2 != 0:
         raise ValueError("队伍数必须为偶数")
-
-    half_rounds = n - 1  # 15轮
+    half_rounds = n - 1
     all_rounds = []
-
-    # 圆圈法生成前半程
-    # fixed_team = n-1 (第16队), circle = teams[0..n-2] (前15队)
     fixed = n - 1
     circle = list(range(n - 1))
-
     for r in range(half_rounds):
         round_matches = []
-
-        # 固定队对阵 circle[r]
         if r % 2 == 0:
             round_matches.append((circle[r], fixed))
         else:
             round_matches.append((fixed, circle[r]))
-
-        # 其余队伍对称配对
-        # circle中，从r出发，配对: (r+1) vs (r-1), (r+2) vs (r-2), ...
         for i in range(1, n // 2):
             left = (r + i) % (n - 1)
             right = (r - i) % (n - 1)
@@ -77,123 +86,270 @@ def generate_round_robin_schedule(teams):
                 round_matches.append((circle[left], circle[right]))
             else:
                 round_matches.append((circle[right], circle[left]))
-
         all_rounds.append(round_matches)
-
-    # 后半程：相同的对阵，主客场对调
     for r in range(half_rounds):
         first_half = all_rounds[r]
-        second_half = [(away, home) for (home, away) in first_half]
-        all_rounds.append(second_half)
-
+        all_rounds.append([(away, home) for (home, away) in first_half])
     return all_rounds
 
 
-def generate_dates(start_date, num_rounds):
+def generate_dates_with_breaks(start_date, num_rounds):
     """
-    生成赛程日期序列。
-
-    S级联赛常规赛约20周，30轮。
-    策略：每周六为主比赛日，部分周三加赛（前半程较快，后半程放缓）。
-    第1~10轮：每周六+周三（快节奏，约5周）
-    第11~30轮：每周六（约20周）
+    生成赛程日期序列，跳过节假日和季中赛休赛期。
+    
+    返回:
+      dates: list[date] - 每轮比赛日期
+      breaks_between: list[(after_round, break_desc)] - 轮次之间插入的休赛说明
     """
     dates = []
+    breaks_between = []
     current = start_date
-    fast_rounds = 10
+    prev_break_name = None
 
     for r in range(num_rounds):
-        if r < fast_rounds:
-            # 快节奏：周三/周六交替
-            if r % 2 == 0:
-                # 周六
-                while current.weekday() != 5:  # 周六=5
-                    current += timedelta(days=1)
-            else:
-                # 下周三
-                while current.weekday() != 2:  # 周三=2
-                    current += timedelta(days=1)
+        # 确定本轮目标星期几
+        if r < FAST_ROUNDS:
+            target_wd = 5 if r % 2 == 0 else 2  # 周六 / 周三
         else:
-            # 慢节奏：每周六
-            while current.weekday() != 5:
+            target_wd = 5  # 仅周六
+
+        # 找到下一个非休赛的比赛日
+        skipped_set = {}  # {break_name: icon}
+        while True:
+            while current.weekday() != target_wd:
                 current += timedelta(days=1)
 
+            is_brk, brk_name, brk_icon = is_break_day(current)
+            if not is_brk:
+                break
+            if brk_name not in skipped_set:
+                skipped_set[brk_name] = brk_icon
+            current += timedelta(days=1)
+
+        if skipped_set:
+            combined = " / ".join(f"{icon} {name}" for name, icon in skipped_set.items())
+            breaks_between.append((r + 1, combined))
+
         dates.append(current)
-        current += timedelta(days=1)  # 移动到下一天，避免重复
+        current += timedelta(days=1)
 
-    return dates
+    return dates, breaks_between
 
 
-def format_schedule_txt(teams, all_rounds, dates):
-    """将赛程格式化为txt表格字符串。"""
+def format_schedule_md(teams, all_rounds, dates, breaks_between):
+    """将赛程格式化为 Markdown，含休赛期标记。"""
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     lines = []
-    lines.append("=" * 100)
-    lines.append("  S级联赛（星脉超级联赛）— 完整赛程")
-    lines.append("  赛季: S7 | 16支战队 | 双循环 | 共30轮 | BO2")
-    lines.append("=" * 100)
+
+    # 文档头部
+    lines.append("# S级联赛（星脉超级联赛）— 完整赛程")
+    lines.append("")
+    lines.append(f"> **赛季**: S7 | **战队**: 16支 | **赛制**: 双循环（主客场各一次）| **共**: {len(all_rounds)}轮 | **单场**: BO2")
+    lines.append("")
+
+    # 休赛日历
+    lines.append("## 休赛日历")
+    lines.append("")
+    lines.append("| 时间段 | 说明 |")
+    lines.append("|--------|------|")
+    for start, end, name, icon in BREAKS:
+        lines.append(f"| {icon} {start.strftime('%m/%d')}–{end.strftime('%m/%d')} | {name} |")
+    ms_start, ms_end, ms_name, ms_icon = MID_SEASON_BREAK
+    lines.append(f"| {ms_icon} {ms_start.strftime('%m/%d')}–{ms_end.strftime('%m/%d')} | {ms_name} |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # 构建break查找表：break在round_x之后
+    break_map = {after_r: desc for after_r, desc in breaks_between}
+
+    # 前半程
+    half_point = len(all_rounds) // 2
+    lines.append("## 前半程（第 1–15 轮）")
     lines.append("")
 
     for round_idx, (round_matches, match_date) in enumerate(zip(all_rounds, dates)):
-        lines.append(f"{'─' * 80}")
-        lines.append(f"  第 {round_idx + 1:02d} 轮  |  日期: {match_date.strftime('%Y-%m-%d')}（{['周一','周二','周三','周四','周五','周六','周日'][match_date.weekday()]}）")
-        lines.append(f"{'─' * 80}")
+        # 半程分界
+        if round_idx == half_point:
+            lines.append("---")
+            lines.append("")
+            lines.append("## 后半程（第 16–30 轮）")
+            lines.append("")
 
-        # 表头
-        lines.append(f"  {'主场战队':<30s} {'':>3s}  {'客场战队':<30s}  {'主场城市':<12s}")
-        lines.append(f"  {'─' * 30} {'─' * 3}  {'─' * 30}  {'─' * 12}")
+        wd = weekdays[match_date.weekday()]
+        lines.append(f"### 第 {round_idx + 1:02d} 轮 — {match_date.strftime('%Y-%m-%d')}（{wd}）")
+        lines.append("")
+        lines.append("| # | 主场战队 | | 客场战队 | 主场城市 |")
+        lines.append("|---|----------|---|----------|----------|")
 
-        for home_idx, away_idx in round_matches:
+        for i, (home_idx, away_idx) in enumerate(round_matches, 1):
             home_team = teams[home_idx]
             away_team = teams[away_idx]
-            home_full = f"{home_team['abbr']} {home_team['full']}"
-            away_full = f"{away_team['abbr']} {away_team['full']}"
-            lines.append(f"  {home_full:<30s}  vs  {away_full:<30s}  {home_team['city']:<12s}")
+            home_full = f"**{home_team['abbr']}** {home_team['full']}"
+            away_full = f"**{away_team['abbr']}** {away_team['full']}"
+            lines.append(f"| {i} | {home_full} | vs | {away_full} | {home_team['city']} |")
 
         lines.append("")
 
-    # 统计信息
-    lines.append("=" * 100)
-    lines.append("  统计摘要")
-    lines.append("=" * 100)
-    lines.append(f"  总轮次: {len(all_rounds)}")
-    lines.append(f"  总场次: {len(all_rounds) * len(all_rounds[0])}")
-    lines.append(f"  起始日期: {dates[0].strftime('%Y-%m-%d')}")
-    lines.append(f"  结束日期: {dates[-1].strftime('%Y-%m-%d')}")
-    lines.append(f"  每队比赛场数: {(len(teams) - 1) * 2}")
+        # 本轮之后的休赛标记
+        after_r = round_idx + 1
+        if after_r in break_map:
+            lines.append(f"> ⏸ **休赛**：{break_map[after_r]}")
+            lines.append("")
+
+    # 统计摘要
+    lines.append("---")
+    lines.append("")
+    lines.append("## 统计摘要")
+    lines.append("")
+    lines.append("| 项目 | 数值 |")
+    lines.append("|------|------|")
+    lines.append(f"| 总轮次 | {len(all_rounds)} |")
+    lines.append(f"| 总场次 | {len(all_rounds) * len(all_rounds[0])} |")
+    lines.append(f"| 起始日期 | {dates[0].strftime('%Y-%m-%d')} |")
+    lines.append(f"| 结束日期 | {dates[-1].strftime('%Y-%m-%d')} |")
+    lines.append(f"| 每队比赛场数 | {(len(teams) - 1) * 2} |")
+    lines.append(f"| 休赛周 | 清明节、劳动节、端午节 + 季中赛2周 |")
     lines.append("")
 
-    # 队名对照
-    lines.append("=" * 100)
-    lines.append("  战队缩写对照表")
-    lines.append("=" * 100)
+    # === 季后赛 ===
+    lines.append("---")
+    lines.append("")
+    lines.append("## 季后赛（S7 星脉超级联赛季后赛）")
+    lines.append("")
+    lines.append("> 🏆 **赛段**: 常规赛结束后 | **参赛**: 常规赛积分前8名 | **时间**: 约3周（8月）")
+    lines.append("")
+    lines.append("### 赛制")
+    lines.append("")
+    lines.append("- **四分之一决赛**：BO3 单败，种子排位 #1 vs #8 / #4 vs #5 / #3 vs #6 / #2 vs #7")
+    lines.append("- **败者组**：常规赛前4名种子若在四分之一决赛落败，获得一次败者组复活机会（BO3）")
+    lines.append("- **半决赛**：BO3")
+    lines.append("- **决赛**：BO5")
+    lines.append("- **世界赛资格**：季后赛前3名获得世界冠军赛参赛名额（第1名直接晋级小组赛，第2、3名参加入围赛）")
+    lines.append("")
+    lines.append("### 日程表")
+    lines.append("")
+    lines.append("| 日期 | 阶段 | 对阵 | 场次 |")
+    lines.append("|------|------|------|------|")
+    lines.append("| 08/02（周六） | 四分之一决赛 Day1 | #1 vs #8 / #4 vs #5 | BO3 ×2 |")
+    lines.append("| 08/03（周日） | 四分之一决赛 Day2 | #3 vs #6 / #2 vs #7 | BO3 ×2 |")
+    lines.append("| 08/09（周六） | 败者组 | 前4种子败者对阵 | BO3 |")
+    lines.append("| 08/10（周日） | 半决赛 Day1 | QF胜者对阵 | BO3 |")
+    lines.append("| 08/16（周六） | 半决赛 Day2 + 败者组决赛 | — | BO3 ×2 |")
+    lines.append("| 08/23（周六） | 总决赛 | — | BO5 |")
+    lines.append("")
+    lines.append("### 晋级对阵图（模板）")
+    lines.append("")
+    lines.append("```")
+    lines.append("四分之一决赛          半决赛            决赛")
+    lines.append("─────────────────────────────────────────────")
+    lines.append(" #1 ──┐")
+    lines.append("      ├─ QF1胜者 ──┐")
+    lines.append(" #8 ──┘             │")
+    lines.append("                    ├─ SF1胜者 ──┐")
+    lines.append(" #4 ──┐             │            │")
+    lines.append("      ├─ QF2胜者 ──┘            │")
+    lines.append(" #5 ──┘                          │")
+    lines.append("                                 ├─ 总冠军")
+    lines.append(" #3 ──┐                          │")
+    lines.append("      ├─ QF3胜者 ──┐            │")
+    lines.append(" #6 ──┘             │            │")
+    lines.append("                    ├─ SF2胜者 ──┘")
+    lines.append(" #2 ──┐             │")
+    lines.append("      ├─ QF4胜者 ──┘")
+    lines.append(" #7 ──┘")
+    lines.append("")
+    lines.append("败者组（仅#1–#4种子L可进入）：")
+    lines.append("  LB → 胜者获得季军 / 世界赛第3名额")
+    lines.append("```")
+    lines.append("")
+
+    # === 世界冠军赛 ===
+    lines.append("---")
+    lines.append("")
+    lines.append("## 世界冠军赛（Rift World Championship · RWC）")
+    lines.append("")
+    lines.append("> 🌍 **主办**: 星脉动力 | **地点**: 沪江市 裂界穹顶 | **时间**: 10月–12月")
+    lines.append("")
+    lines.append("### 中国赛区名额")
+    lines.append("")
+    lines.append("| 名额 | 资格来源 | 说明 |")
+    lines.append("|------|---------|------|")
+    lines.append("| 1 | S级季后赛冠军 | 直接晋级小组赛 |")
+    lines.append("| 2 | S级季后赛亚军 | 参加入围赛 |")
+    lines.append("| 3 | S级季后赛季军 | 参加入围赛 |")
+    lines.append("")
+    lines.append("### 全球赛区名额分配")
+    lines.append("")
+    lines.append("| 赛区 | 名额 | 直接入组 | 入围赛 |")
+    lines.append("|------|------|---------|--------|")
+    lines.append("| 🇨🇳 中国赛区 | 4 | 1 | 3 |")
+    lines.append("| 🇰🇷 韩国赛区 | 3 | 2 | 1 |")
+    lines.append("| 🌏 东南亚赛区 | 2 | 0 | 2 |")
+    lines.append("| 🇪🇺 欧洲赛区 | 2 | 1 | 1 |")
+    lines.append("| 🇺🇸 北美赛区 | 2 | 1 | 1 |")
+    lines.append("| 🌎 其他赛区 | 3 | 0 | 3 |")
+    lines.append("| **合计** | **16** | **5** | **11** |")
+    lines.append("")
+    lines.append("### 赛程表")
+    lines.append("")
+    lines.append("| 日期 | 阶段 | 说明 |")
+    lines.append("|------|------|------|")
+    lines.append("| 10/04–10/18 | 入围赛 | 11队单败淘汰BO3，决出5席进入小组赛 |")
+    lines.append("| 11/01–11/08 | 小组赛 Week1 | 16队瑞士轮（五轮三胜晋级），BO3 |")
+    lines.append("| 11/15–11/22 | 小组赛 Week2 | 瑞士轮继续，决出8强 |")
+    lines.append("| 12/06–12/07 | 八强赛 | BO5 双败制 |")
+    lines.append("| 12/13–12/14 | 半决赛 | BO5 双败制 |")
+    lines.append("| 12/27（周六） | 总决赛 | BO5，裂界穹顶 |")
+    lines.append("")
+    lines.append("### 赛制结构")
+    lines.append("")
+    lines.append("```")
+    lines.append("入围赛（11队 BO3单败）→ 5队晋级")
+    lines.append("         ↓")
+    lines.append("小组赛（16队 瑞士轮 5轮3胜 BO3）→ 8队晋级")
+    lines.append("         ↓")
+    lines.append("八强赛（BO5 双败）→ 4队晋级")
+    lines.append("         ↓")
+    lines.append("半决赛（BO5 双败）→ 2队晋级")
+    lines.append("         ↓")
+    lines.append("总决赛（BO5 · 裂界穹顶）→ 🏆 世界冠军")
+    lines.append("```")
+    lines.append("")
+
+    # 战队缩写对照
+    lines.append("---")
+    lines.append("")
+    lines.append("## 战队缩写对照表")
+    lines.append("")
+    lines.append("| 编号 | 缩写 | 全称 | 主场城市 |")
+    lines.append("|------|------|------|----------|")
     for t in teams:
-        lines.append(f"  {t['abbr']:<6s} = {t['full']}")
+        lines.append(f"| {t['id']} | **{t['abbr']}** | {t['full']} | {t['city']} |")
 
     return "\n".join(lines)
 
 
 def main():
-    # 生成赛程
     all_rounds = generate_round_robin_schedule(S_TEAMS)
 
-    # 生成日期：假设赛季从3月第一个周六开始
-    season_start = date(2025, 3, 1)
+    season_start = SEASON_START
     while season_start.weekday() != 5:
         season_start += timedelta(days=1)
 
-    dates = generate_dates(season_start, len(all_rounds))
+    dates, breaks_between = generate_dates_with_breaks(season_start, len(all_rounds))
+    output = format_schedule_md(S_TEAMS, all_rounds, dates, breaks_between)
 
-    # 格式化输出
-    output = format_schedule_txt(S_TEAMS, all_rounds, dates)
-
-    # 写入文件
     output_dir = os.path.dirname(os.path.abspath(__file__))
-    output_path = os.path.join(output_dir, "schedule_s_league_output.txt")
+    output_path = os.path.join(output_dir, "schedule_s_league_output.md")
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(output)
 
     print(f"[完成] S级联赛赛程已生成 → {output_path}")
     print(f"  共 {len(all_rounds)} 轮，{len(all_rounds) * 8} 场对阵")
+    # 输出休赛断点供核对
+    for after_r, desc in breaks_between:
+        print(f"  ⏸ 第 {after_r - 1} 轮后：{desc}")
 
 
 if __name__ == "__main__":
