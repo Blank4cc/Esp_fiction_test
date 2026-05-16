@@ -285,11 +285,11 @@ def format_playoff_output(teams, results):
     # 常规赛排名
     lines.append("## 常规赛最终排名（前8晋级）")
     lines.append("")
-    lines.append("| 种子 | 战队 | 积分 | 胜 | 负 | 局分 | 强度 |")
-    lines.append("|------|------|------|-----|-----|------|------|")
+    lines.append("| 种子 | 战队 | 积分 | 胜 | 负 | 局分 |")
+    lines.append("|------|------|------|-----|-----|------|")
     for t in teams:
         score_str = f"{t['gw']}:{t['gl']}"
-        lines.append(f"| #{t['rank']} | **{t['abbr']}** {t['full']} | {t['pts']} | {t['wins']} | {t['losses']} | {score_str} | {t['strength']} |")
+        lines.append(f"| #{t['rank']} | **{t['abbr']}** {t['full']} | {t['pts']} | {t['wins']} | {t['losses']} | {score_str} |")
     lines.append("")
 
     # 四分之一决赛

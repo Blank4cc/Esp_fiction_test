@@ -260,7 +260,8 @@ def parse_all_standings(content):
             if in_table and line.startswith("|"):
                 parts = [p.strip() for p in line.split("|") if p.strip()]
                 if len(parts) >= 7:
-                    abbr = parts[1].replace("**", "")
+                    # 战队列: "**FD** 东方霜华 Frost Dawn" → 提取缩写 "FD"
+                    abbr = parts[1].replace("*", "").split()[0]
                     pts = int(parts[2])
                     wins = int(parts[3])
                     losses = int(parts[4])
@@ -289,8 +290,8 @@ def format_region_matches_md(region_name, teams, matches_results):
     lines.append("")
     lines.append("#### 对阵结果")
     lines.append("")
-    lines.append("| # | 主场 | 比分 | 客场 | 强度 |")
-    lines.append("|---|------|------|------|------|")
+    lines.append("| # | 主场 | 比分 | 客场 |")
+    lines.append("|---|------|------|------|")
 
     for i, (home_idx, away_idx, home_team, away_team, winner_abbr, score) in enumerate(matches_results, 1):
         home_full = f"**{home_team['abbr']}** {home_team['full']}"
@@ -299,7 +300,7 @@ def format_region_matches_md(region_name, teams, matches_results):
             home_full = f"🏆 {home_full}"
         else:
             away_full = f"🏆 {away_full}"
-        lines.append(f"| {i} | {home_full} | {score} | {away_full} | {home_team['strength']} vs {away_team['strength']} |")
+        lines.append(f"| {i} | {home_full} | {score} | {away_full} |")
 
     lines.append("")
     return "\n".join(lines)
@@ -326,15 +327,15 @@ def format_region_standings_md(region_name, teams, standings_dict):
     lines = []
     lines.append("#### 积分榜")
     lines.append("")
-    lines.append("| # | 战队 | 积分 | 胜 | 负 | 局分 | 局差 | 强度 |")
-    lines.append("|---|------|------|-----|-----|------|------|------|")
+    lines.append("| # | 战队 | 积分 | 胜 | 负 | 局分 | 局差 |")
+    lines.append("|---|------|------|-----|-----|------|------|")
 
     for rank, row in enumerate(table, 1):
         score_str = f"{row['gw']}:{row['gl']}"
         gd_str = f"+{row['gd']}" if row['gd'] >= 0 else str(row['gd'])
         # 查全名
         full = row['full']
-        lines.append(f"| {rank} | **{row['abbr']}** {full} | {row['pts']} | {row['wins']} | {row['losses']} | {score_str} | {gd_str} | {row['strength']} |")
+        lines.append(f"| {rank} | **{row['abbr']}** {full} | {row['pts']} | {row['wins']} | {row['losses']} | {score_str} | {gd_str} |")
 
     lines.append("")
     return "\n".join(lines)
@@ -357,6 +358,128 @@ def format_full_round_md(round_num, match_date, all_matches_results, all_standin
     lines.append("---")
     lines.append("")
     return "\n".join(lines)
+
+
+# ============================================================
+# 从对阵结果重建积分榜（recalc）
+# ============================================================
+
+def recalc_a_standings_from_file(filepath):
+    """解析A级联赛各赛区所有对阵结果，从零重建积分榜，替换最后积分榜。"""
+    if not os.path.exists(filepath):
+        print("[提示] 还没有模拟数据。")
+        return None
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 初始化空积分榜
+    all_standings = {}
+    for region_name, teams in REGIONS_SIM.items():
+        s = {}
+        for team in teams:
+            s[team["abbr"]] = {"pts": 0, "wins": 0, "losses": 0,
+                               "games_won": 0, "games_lost": 0}
+        all_standings[region_name] = s
+
+    # 对每个赛区，找到其所有对阵结果
+    for region_name, region_teams in REGIONS_SIM.items():
+        # 匹配该赛区下的对阵结果表格
+        # 格式: ### 东赛区\n\n#### 对阵结果\n\n| # | 主场 | 比分 | 客场 |\n...\n\n#### 积分榜
+        pattern = rf'### {re.escape(region_name)}\n\n#### 对阵结果\n\n\| # \| 主场 \| 比分\s*\| 客场 \|\n\|[-| ]+\|\n((?:\|.+\|\n?)+)'
+        for m in re.finditer(pattern, content):
+            table_block = m.group(1)
+            for row_line in table_block.strip().split("\n"):
+                row_line = row_line.strip()
+                if not row_line.startswith("|"):
+                    continue
+                parts = [p.strip() for p in row_line.split("|") if p.strip()]
+                if len(parts) < 4:
+                    continue
+                home_raw = parts[1]
+                score_raw = parts[2]
+                away_raw = parts[3]
+
+                home_abbr = re.sub(r'[🏆\*]', '', home_raw).strip().split()[0] if home_raw.strip() else ""
+                away_abbr = re.sub(r'[🏆\*]', '', away_raw).strip().split()[0] if away_raw.strip() else ""
+
+                st = all_standings[region_name]
+                if home_abbr not in st or away_abbr not in st:
+                    continue
+
+                sp = score_raw.split(":")
+                if len(sp) != 2:
+                    continue
+                try:
+                    h_gw = int(sp[0])
+                    h_gl = int(sp[1])
+                except ValueError:
+                    continue
+
+                if h_gw > h_gl:
+                    pts_home = 3 if h_gl == 0 else 2
+                    pts_away = 1 if h_gl == 1 else 0
+                else:
+                    pts_away = 3 if h_gw == 0 else 2
+                    pts_home = 1 if h_gw == 1 else 0
+
+                st[home_abbr]["pts"] += pts_home
+                st[home_abbr]["games_won"] += h_gw
+                st[home_abbr]["games_lost"] += h_gl
+                if pts_home >= 2:
+                    st[home_abbr]["wins"] += 1
+                else:
+                    st[home_abbr]["losses"] += 1
+
+                st[away_abbr]["pts"] += pts_away
+                st[away_abbr]["games_won"] += h_gl
+                st[away_abbr]["games_lost"] += h_gw
+                if pts_away >= 2:
+                    st[away_abbr]["wins"] += 1
+                else:
+                    st[away_abbr]["losses"] += 1
+
+    # 替换每个赛区的最后一个积分榜
+    new_content = content
+    for region_name, region_teams in REGIONS_SIM.items():
+        st = all_standings[region_name]
+        new_table = format_region_standings_md(region_name, region_teams, st)
+
+        # 找该赛区最后一次出现的积分榜
+        # 积分榜前有 "#### 积分榜" 标记
+        pattern = rf'(### {re.escape(region_name)}\n.*?#### 积分榜\n\n)(\|.+\|\n)+'
+        # 使用更精确的方式：找到最后一个匹配
+        matches = list(re.finditer(
+            rf'#### 积分榜\n\n\| # \| 战队 \| 积分 \| 胜 \| 负 \| 局分 \| 局差 \|\n\|[-| ]+\|\n(?:\|.+\|\n?)+',
+            new_content
+        ))
+        # 筛选属于当前赛区的积分榜
+        region_matches = []
+        for m in matches:
+            # 检查此积分榜前是否有该赛区标识
+            before = new_content[:m.start()]
+            last_region = None
+            for rn in REGIONS_SIM:
+                pos = before.rfind(f"### {rn}")
+                if pos > (last_region[1] if last_region else -1):
+                    last_region = (rn, pos)
+            if last_region and last_region[0] == region_name:
+                region_matches.append(m)
+
+        if region_matches:
+            last_m = region_matches[-1]
+            # 替换：找到 table 结束位置
+            table_end = last_m.end()
+            # 跳过可能的空行
+            while table_end < len(new_content) and new_content[table_end] == '\n':
+                table_end += 1
+            new_content = new_content[:last_m.start()] + new_table + "\n" + new_content[table_end:]
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    print(f"[recalc] 已从对阵结果重建四赛区积分榜。")
+    return all_standings
 
 
 # ============================================================
@@ -441,6 +564,7 @@ def main():
             print(f"    n / next  — 模拟下一轮（第 {current_rounds + 1} 轮）")
         if current_rounds > 0:
             print(f"    r / rollback — 回退上一轮（删除第 {current_rounds} 轮）")
+            print(f"    recalc     — 从对阵结果重建积分榜（手动改比分后使用）")
         print("    q / quit  — 退出")
         print()
 
@@ -457,6 +581,16 @@ def main():
             current_rounds = delete_last_round(output_path, current_rounds)
             _, updated_content = read_existing_data(output_path)
             all_standings = parse_all_standings(updated_content)
+            continue
+
+        elif choice == "recalc":
+            if current_rounds == 0:
+                print("[提示] 还没有模拟数据。")
+                continue
+            new_all = recalc_a_standings_from_file(output_path)
+            if new_all:
+                all_standings = new_all
+                print("  已更新内存积分榜，可继续推演或退出查看文件。")
             continue
 
         elif choice in ("n", "next", ""):

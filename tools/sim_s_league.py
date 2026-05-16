@@ -225,7 +225,9 @@ def parse_standings_from_text(content):
             parts = [p.strip() for p in line.split("|") if p.strip()]
             if len(parts) >= 7:
                 rank_str = parts[0]
-                abbr = parts[1]
+                # 战队列格式: "**NS** 深南闪电 NEON SPARK" → 提取缩写 "NS"
+                abbr_raw = parts[1]
+                abbr = abbr_raw.replace("*", "").split()[0]  # 去掉**取首词
                 pts = int(parts[2])
                 wins = int(parts[3])
                 losses = int(parts[4])
@@ -257,8 +259,8 @@ def format_match_result_md(round_num, match_date, matches_results):
     lines.append("")
     lines.append("### 对阵结果")
     lines.append("")
-    lines.append("| # | 主场 | 比分 | 客场 | 强度对比 |")
-    lines.append("|---|------|------|------|----------|")
+    lines.append("| # | 主场 | 比分 | 客场 |")
+    lines.append("|---|------|------|------|")
 
     for i, (home_idx, away_idx, home_team, away_team, winner_abbr, score) in enumerate(matches_results, 1):
         home_full = f"**{home_team['abbr']}** {home_team['full']}"
@@ -267,8 +269,7 @@ def format_match_result_md(round_num, match_date, matches_results):
             home_full = f"🏆 {home_full}"
         else:
             away_full = f"🏆 {away_full}"
-        strength_str = f"{home_team['strength']} vs {away_team['strength']}"
-        lines.append(f"| {i} | {home_full} | {score} | {away_full} | {strength_str} |")
+        lines.append(f"| {i} | {home_full} | {score} | {away_full} |")
 
     lines.append("")
     return "\n".join(lines)
@@ -299,16 +300,126 @@ def format_standings_md(standings_dict):
     lines = []
     lines.append("### 积分榜")
     lines.append("")
-    lines.append("| # | 战队 | 积分 | 胜 | 负 | 局分 | 局差 | 强度 |")
-    lines.append("|---|------|------|-----|-----|------|------|------|")
+    lines.append("| # | 战队 | 积分 | 胜 | 负 | 局分 | 局差 |")
+    lines.append("|---|------|------|-----|-----|------|------|")
 
     for rank, row in enumerate(table, 1):
         score_str = f"{row['gw']}:{row['gl']}"
         gd_str = f"+{row['gd']}" if row['gd'] >= 0 else str(row['gd'])
-        lines.append(f"| {rank} | **{row['abbr']}** {row['full']} | {row['pts']} | {row['wins']} | {row['losses']} | {score_str} | {gd_str} | {row['strength']} |")
+        lines.append(f"| {rank} | **{row['abbr']}** {row['full']} | {row['pts']} | {row['wins']} | {row['losses']} | {score_str} | {gd_str} |")
 
     lines.append("")
     return "\n".join(lines)
+
+
+# ============================================================
+# 从对阵结果重建积分榜（recalc）
+# ============================================================
+
+def recalc_standings_from_file(filepath):
+    """
+    解析文件中所有轮次的对阵结果，从零重建积分榜，
+    并用重建后的积分榜替换文件中最后一张积分榜表格。
+    
+    用途：用户手动修改对阵结果（比分）后，运行 recalc 让积分榜自动一致。
+    返回：重建后的 standings dict。
+    """
+    if not os.path.exists(filepath):
+        print("[提示] 还没有模拟数据，无需重建。")
+        return None
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 初始化空积分榜
+    standings = {}
+    for team in S_TEAMS_SIM:
+        standings[team["abbr"]] = {"pts": 0, "wins": 0, "losses": 0,
+                                     "games_won": 0, "games_lost": 0}
+
+    # 匹配每个 "### 对阵结果" 后的表格行（容忍表头空格变化）
+    pattern = r'### 对阵结果\n\n\| # \| 主场 \| 比分\s*\| 客场 \|\n\|[-| ]+\|\n((?:\|.+\|\n?)+)'
+    for m in re.finditer(pattern, content):
+        table_block = m.group(1)
+        for row_line in table_block.strip().split("\n"):
+            row_line = row_line.strip()
+            if not row_line.startswith("|"):
+                continue
+            parts = [p.strip() for p in row_line.split("|") if p.strip()]
+            if len(parts) < 4:
+                continue
+            # parts[0]=#, parts[1]=主场(可能带🏆), parts[2]=比分, parts[3]=客场(可能带🏆)
+            home_raw = parts[1]
+            score_raw = parts[2]
+            away_raw = parts[3]
+
+            # 提取缩写：去除 **、🏆，取第一个词
+            home_abbr = re.sub(r'[🏆\*]', '', home_raw).strip().split()[0] if home_raw.strip() else ""
+            away_abbr = re.sub(r'[🏆\*]', '', away_raw).strip().split()[0] if away_raw.strip() else ""
+
+            if home_abbr not in standings or away_abbr not in standings:
+                continue
+
+            # 解析比分
+            sp = score_raw.split(":")
+            if len(sp) != 2:
+                continue
+            try:
+                h_gw = int(sp[0])
+                h_gl = int(sp[1])
+            except ValueError:
+                continue
+
+            # 确定胜者和积分
+            if h_gw > h_gl:
+                winner_abbr = home_abbr
+                pts_home = 3 if h_gl == 0 else 2
+                pts_away = 1 if h_gl == 1 else 0
+            else:
+                winner_abbr = away_abbr
+                pts_away = 3 if h_gw == 0 else 2
+                pts_home = 1 if h_gw == 1 else 0
+
+            # 更新积分
+            standings[home_abbr]["pts"] += pts_home
+            standings[home_abbr]["games_won"] += h_gw
+            standings[home_abbr]["games_lost"] += h_gl
+            if pts_home >= 2:
+                standings[home_abbr]["wins"] += 1
+            else:
+                standings[home_abbr]["losses"] += 1
+
+            standings[away_abbr]["pts"] += pts_away
+            standings[away_abbr]["games_won"] += h_gl
+            standings[away_abbr]["games_lost"] += h_gw
+            if pts_away >= 2:
+                standings[away_abbr]["wins"] += 1
+            else:
+                standings[away_abbr]["losses"] += 1
+
+    # 用 format_standings_md 生成新积分榜
+    new_standings_md = format_standings_md(standings)
+
+    # 找到文件中最后一个积分榜并替换
+    last_standings_pos = content.rfind("### 积分榜")
+    if last_standings_pos < 0:
+        print("[警告] 未找到积分榜，无法替换。")
+        return standings
+
+    # 找到该积分榜表格结束位置（下一个 "## " 或 "--- " 或文件尾）
+    after_table = content.find("\n---", last_standings_pos)
+    if after_table < 0:
+        after_table = content.find("\n## ", last_standings_pos)
+    if after_table < 0:
+        after_table = len(content)
+
+    new_content = content[:last_standings_pos] + new_standings_md + content[after_table:]
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    print(f"[recalc] 已从对阵结果重建积分榜，覆盖文件中最后一张积分榜。")
+    return standings
 
 
 # ============================================================
@@ -410,6 +521,7 @@ def main():
             print(f"    n / next  — 模拟下一轮（第 {current_rounds + 1} 轮）")
         if current_rounds > 0:
             print(f"    r / rollback — 回退上一轮（删除第 {current_rounds} 轮）")
+            print(f"    recalc     — 从对阵结果重建积分榜（手动改比分后使用）")
         print("    q / quit  — 退出")
         print()
 
@@ -426,6 +538,16 @@ def main():
             current_rounds = delete_last_round(output_path, current_rounds)
             _, updated_content = read_existing_data(output_path)
             standings = parse_standings_from_text(updated_content)
+            continue
+
+        elif choice == "recalc":
+            if current_rounds == 0:
+                print("[提示] 还没有模拟数据。")
+                continue
+            new_standings = recalc_standings_from_file(output_path)
+            if new_standings:
+                standings = new_standings
+                print("  已更新内存积分榜，可继续推演或退出查看文件。")
             continue
 
         elif choice in ("n", "next", ""):
