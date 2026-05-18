@@ -145,6 +145,8 @@
 | 7 | **BF** 粤城烈焰 BLAZING FIRE | vs | **PV** 幻界战队 PHANTOM VOID | 粤城 |
 | 8 | **IC** 北燕皇朝 IMPERIAL CROWN | vs | **NS** 深南闪电 NEON SPARK | 北燕市 |
 
+> ⏸ **休赛**：🌿 清明节
+
 ### 第 11 轮 — 2052-04-13（周六）
 
 | # | 主场战队 | | 客场战队 | 主场城市 |
@@ -158,7 +160,6 @@
 | 7 | **TR** 蓉城咆哮 THUNDER ROAR | vs | **IC** 北燕皇朝 IMPERIAL CROWN | 蓉城 |
 | 8 | **NS** 深南闪电 NEON SPARK | vs | **BF** 粤城烈焰 BLAZING FIRE | 深南市 |
 
-> ⏸ **休赛**：🌿 清明节
 
 ### 第 12 轮 — 2052-04-20（周六）
 
